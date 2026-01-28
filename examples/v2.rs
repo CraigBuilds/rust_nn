@@ -158,7 +158,7 @@ impl MultiLayerPerceptron {
         let mut next_delta_z_vec: Option<VecF> = None;
         let num_layers = self.layers.len();
         for i in (0..num_layers).rev() {
-            let (left, right) = self.layers.split_at_mut(i + 1);
+            let (left, right) = self.layers.split_at_mut(i + 1); //enable mutable borrow of one layer while having immutable access to others
             let layer = &mut left[i];
             let layer_input = &a_cache[i];
             let a = &a_cache[i + 1];
