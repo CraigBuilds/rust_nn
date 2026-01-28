@@ -68,7 +68,6 @@ impl Neuron {
     /// x is the input vector to this neuron at this forward pass
     /// delta_z (dL/dz) is the gradient of the loss (L) relative to the neuron's pre-activation output z for this input
     /// L is given by the overall model's loss function
-    /// lr is the learning rate
     fn apply_gradient_descent(&mut self, x: &VecF, delta_z: f64, learning_rate: f64) {
         for i in 0..self.w.len() {
             // Update each weight using gradient descent: w_i -= lr * dL/dw_i, where dL/dw_i = delta_z * x[i]
