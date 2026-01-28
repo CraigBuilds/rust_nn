@@ -56,7 +56,8 @@ struct Neuron {
 impl Neuron {
 
     /// Forward pass: returns (z, a) where z = w·x + b, a = act.f(z)
-    /// i.e pre-activation and post-activation outputs
+    /// param x: input vector to the neuron
+    /// return: (z, a) i.e pre-activation and post-activation outputs
     /// pre-activation output is useful for computing derivatives during backpropagation
     fn forward(&self, x: &VecF) -> (f64, f64) {
         let z = self.w.dot(x) + self.b;
