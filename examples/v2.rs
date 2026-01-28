@@ -68,13 +68,13 @@ impl Neuron {
     /// delta_z (dL/dz) is the gradient of the loss (L) relative to the neuron's pre-activation output z for this input
     /// L is given by the overall model's loss function
     /// lr is the learning rate
-    fn apply_gradient_descent(&mut self, x: &VecF, delta_z: f64, lr: f64) {
+    fn apply_gradient_descent(&mut self, x: &VecF, delta_z: f64, learning_rate: f64) {
         for i in 0..self.w.len() {
             // Update each weight using gradient descent: w_i -= lr * dL/dw_i, where dL/dw_i = delta_z * x[i]
             let grad = delta_z * x[i]; // dL/dw_i, i.e partial derivative of loss with respect to weight w_i
-            self.w[i] -= lr * grad; // Update weight based on learning rate and gradient
+            self.w[i] -= learning_rate * grad; // Update weight based on learning rate and gradient
         }
-        self.b -= lr * delta_z; // Update bias: b -= lr * dL/db, where dL/db = delta_z
+        self.b -= learning_rate * delta_z; // Update bias: b -= lr * dL/db, where dL/db = delta_z
     }
 }
 
@@ -90,16 +90,17 @@ impl DenseLayer {
         ndarray::Array1::from(self.0.iter().map(|n| n.forward(x).1).collect::<Vec<f64>>())
     }
 
-    /// Apply gradients to all neurons in the layer using the provided delta_z vector.
-    /// Each neuron's weights and bias are updated using gradient descent.
-    fn apply_gradient_descent(&mut self, input: &VecF, lr: f64, delta_z_vec: &VecF) {
-        for (neuron, &dz) in self.0.iter_mut().zip(delta_z_vec.iter()) {
-            neuron.apply_gradient_descent(input, dz, lr);
-        }
-    }
-
-    fn compute_delta_z(&self, a: &VecF, target: &VecF, next_delta_z: Option<&VecF>, next_layer: Option<&DenseLayer>, input: &VecF) -> VecF {
-        let mut delta_z = VecF::zeros(self.0.len());
+    /// This is the core backpropagation step for the layer.
+    /// Compute vector of delta_z for the layer given activations (actual outputs) and targets (expected outputs), or next layer's delta_z
+    /// For output layer, target must be provided; for hidden layers, next_delta_z and next_layer must be provided
+    /// param a: activations of this layer
+    /// param target: expected outputs for this layer (only for output layer)
+    /// param next_delta_z: delta_z vector from the next layer (only for hidden layers)
+    /// param next_layer: reference to the next layer (only for hidden layers)
+    /// param input: input vector to this layer during forward pass
+    /// return: vector of delta_z for this layer
+    fn compute_gradients(&self, a: &VecF, target: &VecF, next_delta_z: Option<&VecF>, next_layer: Option<&DenseLayer>, input: &VecF) -> VecF {
+        let mut delta_z = VecF::zeros(self.0.len()); // Initialize delta_z vector
         for (j, neuron) in self.0.iter().enumerate() {
             let (z, a_j) = neuron.forward(input);
             let da_dz = neuron.act.df_dz(z, a_j).unwrap(); // assuming non-Step activations here
@@ -121,6 +122,13 @@ impl DenseLayer {
         delta_z
     }
 
+    /// Apply gradients to all neurons in the layer using the provided delta_z vector.
+    /// Each neuron's weights and bias are updated using gradient descent.
+    fn apply_gradient_descent(&mut self, input: &VecF, lr: f64, delta_z_vec: &VecF) {
+        for (neuron, &delta_z) in self.0.iter_mut().zip(delta_z_vec.iter()) {
+            neuron.apply_gradient_descent(input, delta_z, lr);
+        }
+    }
 }
 
 // ============================================================================
@@ -134,6 +142,8 @@ struct MultiLayerPerceptron {
 impl MultiLayerPerceptron {
     /// Train the MLP using backpropagation
     fn train(&mut self, x: &VecF, target: &VecF, lr: f64) {
+        
+        // Initialize caches for activations
         let mut a_cache: Vec<VecF> = Vec::with_capacity(self.layers.len() + 1);
         a_cache.push(x.clone());
         
@@ -144,7 +154,7 @@ impl MultiLayerPerceptron {
         }
         
         //Backwards pass (compute gradients and update weights)
-        let mut next_delta_z: Option<VecF> = None;
+        let mut next_delta_z_vec: Option<VecF> = None;
         let num_layers = self.layers.len();
         for i in (0..num_layers).rev() {
             let (left, right) = self.layers.split_at_mut(i + 1);
@@ -152,9 +162,11 @@ impl MultiLayerPerceptron {
             let layer_input = &a_cache[i];
             let a = &a_cache[i + 1];
             let next_layer = if i + 1 < num_layers { Some(&right[0]) } else { None };
-            let delta_z = layer.compute_delta_z(a, target, next_delta_z.as_ref(), next_layer, layer_input);
-            layer.apply_gradient_descent(layer_input, lr, &delta_z);
-            next_delta_z = Some(delta_z);
+
+            let delta_z_vec = layer.compute_gradients(a, target, next_delta_z_vec.as_ref(), next_layer, layer_input);
+            layer.apply_gradient_descent(layer_input, lr, &delta_z_vec);
+            
+            next_delta_z_vec = Some(delta_z_vec);
         }
     }
 }
