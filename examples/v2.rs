@@ -87,7 +87,7 @@ impl DenseLayer {
 
     /// Forward pass for the entire layer, returns activations as VecF
     fn forward(&self, x: &VecF) -> VecF {
-        ndarray::Array1::from(self.0.iter().map(|n| n.forward(x).1).collect::<Vec<f64>>())
+        self.0.iter().map(|n| n.forward(x).1).collect()
     }
 
     /// This is the core backpropagation step for the layer.
