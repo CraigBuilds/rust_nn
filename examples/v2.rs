@@ -312,6 +312,15 @@ impl ConvolutionalNeuralNetwork {
     }
 }
 
+// ============================================================================
+// Attention Mechanism Struct - Simplified attention layer
+// ============================================================================
+struct AttentionLayer {
+    pub query_weights: VecF,
+    pub key_weights: VecF,
+    pub value_weights: VecF,
+}
+
 fn main() {
     // Example: XOR problem (2 inputs, 1 output)
     // XOR truth table:
