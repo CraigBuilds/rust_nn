@@ -31,13 +31,13 @@ impl ActivationFunction {
     }
 
     // derivative d a / d z; None for Step
-    fn df_dz(self, z: f64, a: f64) -> Option<f64> {
+    fn df_dz(self, z: f64, actual_output: f64) -> Option<f64> {
         match self {
             ActivationFunction::Identity => Some(1.0),
             ActivationFunction::ReLU => Some(if z > 0.0 { 1.0 } else { 0.0 }),
             ActivationFunction::LeakyReLU { slope } => Some(if z > 0.0 { 1.0 } else { slope }),
-            ActivationFunction::Sigmoid => Some(a * (1.0 - a)),
-            ActivationFunction::Tanh => Some(1.0 - a * a),
+            ActivationFunction::Sigmoid => Some(actual_output * (1.0 - actual_output)),
+            ActivationFunction::Tanh => Some(1.0 - actual_output * actual_output),
             ActivationFunction::Step => None,
         }
     }
@@ -55,14 +55,14 @@ struct Neuron {
 
 impl Neuron {
 
-    /// Forward pass: returns (z, a) where z = w·x + b, a = act.f(z)
+    /// Forward pass: returns (z, actual_output) where z = w·x + b, actual_output = act.f(z)
     /// param x: input vector to the neuron
-    /// return: (z, a) i.e pre-activation and post-activation outputs
+    /// return: (z, actual_output) i.e pre-activation and post-activation outputs
     /// pre-activation output is useful for computing derivatives during backpropagation
     fn forward(&self, x: &VecF) -> (f64, f64) {
         let z = self.w.dot(x) + self.b;
-        let a = self.act.f(z);
-        (z, a)
+        let actual_output = self.act.f(z);
+        (z, actual_output)
     }
 
     /// Update all weights and bias in place based, given delta_z, using gradient descent
@@ -93,21 +93,21 @@ impl DenseLayer {
 
     /// This is the core backpropagation step for the layer.
     /// Compute vector of delta_z for the layer given activations (actual outputs) and targets (expected outputs), or next layer's delta_z
-    /// For output layer, target must be provided; for hidden layers, next_delta_z and next_layer must be provided
-    /// param a: activations of this layer
-    /// param target: expected outputs for this layer (only for output layer)
+    /// For output layer, expected_output must be provided; for hidden layers, next_delta_z and next_layer must be provided
+    /// param actual_output: activations of this layer
+    /// param expected_output: expected outputs for this layer (only for output layer)
     /// param next_delta_z: delta_z vector from the next layer (only for hidden layers)
     /// param next_layer: reference to the next layer (only for hidden layers)
     /// param input: input vector to this layer during forward pass
     /// return: vector of delta_z for this layer
-    fn compute_gradients(&self, a: &VecF, target: &VecF, next_delta_z: Option<&VecF>, next_layer: Option<&DenseLayer>, input: &VecF) -> VecF {
+    fn compute_gradients(&self, actual_output: &VecF, expected_output: &VecF, next_delta_z: Option<&VecF>, next_layer: Option<&DenseLayer>, input: &VecF) -> VecF {
         let mut delta_z_vec = VecF::zeros(self.0.len()); // Initialize delta_z vector
         for (j, neuron) in self.0.iter().enumerate() {
-            let (z, a_j) = neuron.forward(input); //pre and post activation outputs
-            let da_dz = neuron.act.df_dz(z, a_j).unwrap(); // derivative of activation function (assuming non-Step activations here)
+            let (z, actual_output_j) = neuron.forward(input); //pre and post activation outputs
+            let da_dz = neuron.act.df_dz(z, actual_output_j).unwrap(); // derivative of activation function (assuming non-Step activations here)
             let delta_z = if next_delta_z.is_none() {
                 // Output layer is simple - delta_z is just the (actual_output minus expected_output) times derivative of activation function
-                (a[j] - target[j]) * da_dz
+                (actual_output[j] - expected_output[j]) * da_dz
             } else {
                 // Hidden layer is more complicated - delta_z depends on next layer's weights and delta_z
                 let mut sum = 0.0;
@@ -142,16 +142,16 @@ struct MultiLayerPerceptron {
 
 impl MultiLayerPerceptron {
     /// Train the MLP using backpropagation
-    fn train(&mut self, x: &VecF, target: &VecF, lr: f64) {
+    fn train(&mut self, x: &VecF, expected_output: &VecF, lr: f64) {
         
         // Initialize caches for activations
-        let mut a_cache: Vec<VecF> = Vec::with_capacity(self.layers.len() + 1);
-        a_cache.push(x.clone());
+        let mut actual_output_cache: Vec<VecF> = Vec::with_capacity(self.layers.len() + 1);
+        actual_output_cache.push(x.clone());
         
         // Forward pass (calculate and cache activations (outputs) for each layer)
         for layer in &self.layers {
-            let a = layer.forward(a_cache.last().unwrap());
-            a_cache.push(a);
+            let actual_output = layer.forward(actual_output_cache.last().unwrap());
+            actual_output_cache.push(actual_output);
         }
         
         //Backwards pass (compute gradients and update weights)
@@ -160,11 +160,11 @@ impl MultiLayerPerceptron {
         for i in (0..num_layers).rev() {
             let (left, right) = self.layers.split_at_mut(i + 1); //enable mutable borrow of one layer while having immutable access to others
             let layer = &mut left[i];
-            let layer_input = &a_cache[i];
-            let a = &a_cache[i + 1];
+            let layer_input = &actual_output_cache[i];
+            let actual_output = &actual_output_cache[i + 1];
             let next_layer = if i + 1 < num_layers { Some(&right[0]) } else { None };
 
-            let delta_z_vec = layer.compute_gradients(a, target, next_delta_z_vec.as_ref(), next_layer, layer_input);
+            let delta_z_vec = layer.compute_gradients(actual_output, expected_output, next_delta_z_vec.as_ref(), next_layer, layer_input);
             layer.apply_gradient_descent(layer_input, lr, &delta_z_vec);
             
             next_delta_z_vec = Some(delta_z_vec);
@@ -192,8 +192,8 @@ impl ConvolutionalLayer1D {
             // Each neuron is a filter; apply all filters and sum their outputs
             let mut sum = 0.0;
             for neuron in &self.0 {
-                let (_z, a) = neuron.forward(&x_slice.to_owned());
-                sum += a;
+                let (_z, actual_output) = neuron.forward(&x_slice.to_owned());
+                sum += actual_output;
             }
             output[i] = sum;
         }
@@ -201,18 +201,18 @@ impl ConvolutionalLayer1D {
     }
 
     /// Compute gradients (delta_z) for the convolutional layer.
-    /// For output layer: target must be provided, next_delta_z/next_layer are None.
-    /// For hidden layer: next_delta_z and next_layer must be provided, target is ignored.
-    /// - a: activations of this layer
-    /// - target: expected outputs for this layer (only for output layer)
+    /// For output layer: expected_output must be provided, next_delta_z/next_layer are None.
+    /// For hidden layer: next_delta_z and next_layer must be provided, expected_output is ignored.
+    /// - actual_output: activations of this layer
+    /// - expected_output: expected outputs for this layer (only for output layer)
     /// - next_delta_z: delta_z vector from the next layer (only for hidden layers)
     /// - next_layer: reference to the next layer (only for hidden layers)
     /// - input: input vector to this layer during forward pass
     /// Returns: vector of delta_z for this layer (length = number of neurons)
     fn compute_gradients(
         &self,
-        a: &VecF,
-        target: &VecF,
+        actual_output: &VecF,
+        expected_output: &VecF,
         next_delta_z: Option<&VecF>,
         next_layer: Option<&ConvolutionalLayer1D>,
         input: &VecF,
@@ -231,12 +231,12 @@ impl ConvolutionalLayer1D {
 
             for i in 0..output_len {
                 let x_slice = input.slice(s![i..i + filter_len]);
-                let (z, a_j) = neuron.forward(&x_slice.to_owned());
-                let da_dz = neuron.act.df_dz(z, a_j).unwrap();
+                let (z, actual_output_j) = neuron.forward(&x_slice.to_owned());
+                let da_dz = neuron.act.df_dz(z, actual_output_j).unwrap();
 
                 let delta_z = if next_delta_z.is_none() {
-                    // Output layer: delta_z = (a - target) * da/dz
-                    (a[i] - target[i]) * da_dz
+                    // Output layer: delta_z = (actual_output - expected_output) * da/dz
+                    (actual_output[i] - expected_output[i]) * da_dz
                 } else {
                     // Hidden layer: sum over next layer's weights * next_delta_z, times da/dz
                     let mut sum = 0.0;
@@ -280,15 +280,15 @@ impl ConvolutionalNeuralNetwork {
     }
 
     /// Train the CNN using backpropagation
-    fn train(&mut self, x: &VecF, target: &VecF, lr: f64) {
+    fn train(&mut self, x: &VecF, expected_output: &VecF, lr: f64) {
         // Initialize caches for activations
-        let mut a_cache: Vec<VecF> = Vec::with_capacity(self.layers.len() + 1);
-        a_cache.push(x.clone());
+        let mut actual_output_cache: Vec<VecF> = Vec::with_capacity(self.layers.len() + 1);
+        actual_output_cache.push(x.clone());
 
         // Forward pass (calculate and cache activations (outputs) for each layer)
         for layer in &self.layers {
-            let a = layer.forward(a_cache.last().unwrap());
-            a_cache.push(a);
+            let actual_output = layer.forward(actual_output_cache.last().unwrap());
+            actual_output_cache.push(actual_output);
         }
 
         //Backwards pass (compute gradients and update weights)
@@ -297,11 +297,11 @@ impl ConvolutionalNeuralNetwork {
         for i in (0..num_layers).rev() {
             let (left, right) = self.layers.split_at_mut(i + 1);
             let layer = &mut left[i];
-            let layer_input = &a_cache[i];
-            let a = &a_cache[i + 1];
+            let layer_input = &actual_output_cache[i];
+            let actual_output = &actual_output_cache[i + 1];
             let next_layer = if i + 1 < num_layers { Some(&right[0]) } else { None };
 
-            let delta_z_vec = layer.compute_gradients(a, target, next_delta_z_vec.as_ref(), next_layer, layer_input);
+            let delta_z_vec = layer.compute_gradients(actual_output, expected_output, next_delta_z_vec.as_ref(), next_layer, layer_input);
             layer.apply_gradient_descent(layer_input, lr, &delta_z_vec);
 
             next_delta_z_vec = Some(delta_z_vec);
@@ -323,21 +323,21 @@ impl ConvolutionalNeuralNetwork2 {
         self.dense_layers.iter().fold(conv_output, |a, layer| layer.forward(&a))
     }
 
-    fn train(&mut self, x: &VecF, target: &VecF, lr: f64) {
+    fn train(&mut self, x: &VecF, expected_output: &VecF, lr: f64) {
         // Initialize caches for activations
-        let mut a_cache: Vec<VecF> = Vec::with_capacity(self.conv_layers.len() + self.dense_layers.len() + 1);
-        a_cache.push(x.clone());
+        let mut actual_output_cache: Vec<VecF> = Vec::with_capacity(self.conv_layers.len() + self.dense_layers.len() + 1);
+        actual_output_cache.push(x.clone());
 
         // Forward pass through convolutional layers
         for layer in &self.conv_layers {
-            let a = layer.forward(a_cache.last().unwrap());
-            a_cache.push(a);
+            let actual_output = layer.forward(actual_output_cache.last().unwrap());
+            actual_output_cache.push(actual_output);
         }
 
         // Forward pass through dense layers
         for layer in &self.dense_layers {
-            let a = layer.forward(a_cache.last().unwrap());
-            a_cache.push(a);
+            let actual_output = layer.forward(actual_output_cache.last().unwrap());
+            actual_output_cache.push(actual_output);
         }
 
         // Backwards pass (compute gradients and update weights)
@@ -349,22 +349,22 @@ impl ConvolutionalNeuralNetwork2 {
                 // Convolutional layer
                 let conv_index = i - self.dense_layers.len();
                 let layer = &mut self.conv_layers[conv_index];
-                let layer_input = &a_cache[i];
-                let a = &a_cache[i + 1];
+                let layer_input = &actual_output_cache[i];
+                let actual_output = &actual_output_cache[i + 1];
                 let next_layer = if conv_index + 1 < self.conv_layers.len() { Some(&self.conv_layers[conv_index + 1]) } else { None };
 
-                let delta_z_vec = layer.compute_gradients(a, target, next_delta_z_vec.as_ref(), next_layer, layer_input);
+                let delta_z_vec = layer.compute_gradients(actual_output, expected_output, next_delta_z_vec.as_ref(), next_layer, layer_input);
                 layer.apply_gradient_descent(layer_input, lr, &delta_z_vec);
 
                 next_delta_z_vec = Some(delta_z_vec);
             } else {
                 // Dense layer
                 let layer = &mut self.dense_layers[i];
-                let layer_input = &a_cache[i];
-                let a = &a_cache[i + 1];
+                let layer_input = &actual_output_cache[i];
+                let actual_output = &actual_output_cache[i + 1];
                 let next_layer = if i + 1 < self.dense_layers.len() { Some(&self.dense_layers[i + 1]) } else { None };
 
-                let delta_z_vec = layer.compute_gradients(a, target, next_delta_z_vec.as_ref(), next_layer, layer_input);
+                let delta_z_vec = layer.compute_gradients(actual_output, expected_output, next_delta_z_vec.as_ref(), next_layer, layer_input);
                 layer.apply_gradient_descent(layer_input, lr, &delta_z_vec);
 
                 next_delta_z_vec = Some(delta_z_vec);
@@ -390,7 +390,7 @@ fn main() {
         array![1.0, 0.0],
         array![1.0, 1.0],
     ];
-    let targets = vec![
+    let expected_outputs = vec![
         array![0.0],
         array![1.0],
         array![1.0],
@@ -425,15 +425,15 @@ fn main() {
     // Training loop
     let lr = 0.1;
     for epoch in 0..10000 {
-        for (x, y) in inputs.iter().zip(targets.iter()) {
+        for (x, y) in inputs.iter().zip(expected_outputs.iter()) {
             mlp.train(x, y, lr);
         }
         // Optionally print loss every 1000 epochs
         if epoch % 1000 == 0 {
-            let loss: f64 = inputs.iter().zip(targets.iter())
+            let loss: f64 = inputs.iter().zip(expected_outputs.iter())
                 .map(|(x, y)| {
-                    let output = mlp.layers.iter().fold(x.clone(), |a, layer| layer.forward(&a));
-                    (output[0] - y[0]).powi(2)
+                    let actual_output = mlp.layers.iter().fold(x.clone(), |a, layer| layer.forward(&a));
+                    (actual_output[0] - y[0]).powi(2)
                 })
                 .sum::<f64>() / 4.0;
             println!("Epoch {epoch}, loss: {loss:.4}");
@@ -442,8 +442,8 @@ fn main() {
 
     // Test predictions
     println!("Trained MLP predictions for XOR:");
-    for (x, y) in inputs.iter().zip(targets.iter()) {
-        let output = mlp.layers.iter().fold(x.clone(), |a, layer| layer.forward(&a));
-        println!("Input: {:?}, Target: {}, Predicted: {:.3}", x, y[0], output[0]);
+    for (x, y) in inputs.iter().zip(expected_outputs.iter()) {
+        let actual_output = mlp.layers.iter().fold(x.clone(), |a, layer| layer.forward(&a));
+        println!("Input: {:?}, Target: {}, Predicted: {:.3}", x, y[0], actual_output[0]);
     }
 }
