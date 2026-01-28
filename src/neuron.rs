@@ -12,6 +12,17 @@ pub struct Neuron {
 }
 
 impl Neuron {
+    /// Predict output for binary classification (step activation)
+    pub fn predict_step(&self, x: &VecF) -> i8 {
+        let (_, a) = self.forward(x);
+        if a >= 0.0 { 1 } else { -1 }
+    }
+
+    /// Predict output for regression or continuous output
+    pub fn predict_continuous(&self, x: &VecF) -> f64 {
+        let (_, a) = self.forward(x);
+        a
+    }
 
     /// Forward pass: returns (z, a) where z = w·x + b, a = act.f(z)
     /// i.e pre-activation and post-activation outputs

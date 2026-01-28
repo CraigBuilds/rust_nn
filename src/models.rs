@@ -1,4 +1,4 @@
-use crate::neuron::Neuron;
+use crate::neuron::{Neuron};
 use rand::rngs::StdRng;
 use rand_distr::{Distribution, Normal};
 use crate::VecF;
@@ -24,13 +24,60 @@ pub trait Model: Sized {
 // Layer Trait - Common interface for layers in neural networks
 // ============================================================================
 
-pub trait Layer {
-    fn forward(&self, input: &VecF) -> VecF;
-    fn backward(&mut self, input: &VecF, grad_output: &VecF, lr: f64) -> VecF;
-}
+// pub trait Layer {
+//     fn forward(&self, input: &VecF) -> VecF;
+//     fn backward(&mut self, input: &VecF, grad_output: &VecF, lr: f64) -> VecF;
+// }
 
 /// A fully connected feedforward layer
 pub struct DenseLayer(pub Vec<Neuron>);
+
+impl DenseLayer {
+
+    /// Forward pass for the entire layer, returns activations as VecF
+    pub fn forward(&self, x: &VecF) -> VecF {
+        ndarray::Array1::from(self.0.iter().map(|n| n.forward(x).1).collect::<Vec<f64>>())
+    }
+
+    /// Generalized gradient application for any layer (SLP/MLP)
+    /// The delta_fn closure computes delta_z for each neuron given the neuron, its activation, and its index
+    /// For an SLP, delta_fn would implement the perceptron learning rule
+    /// For an MLP, delta_fn would compute gradients based on backpropagation
+    pub fn apply_gradients_with<F>(&mut self, input: &VecF, lr: f64, mut delta_fn: F)
+    where
+        F: FnMut(&Neuron, f64, usize) -> f64,
+    {
+        let activations: Vec<f64> = self.0.iter().map(|n| n.forward(input).1).collect();
+        for (i, neuron) in self.0.iter_mut().enumerate() {
+            let dz = delta_fn(neuron, activations[i], i);
+            neuron.apply_gradient_descent(input, dz, lr);
+        }
+    }
+
+    //Wrapper around `apply_gradients_with`` for perceptron learning rule
+    pub fn apply_gradients_plr(&mut self, input: &VecF, actual_value: i8, lr: f64) {
+        
+        fn compute_delta_z(a: f64, actual_value: i8) -> f64 {
+            let prediction = if a >= 0.0 { 1 } else { -1 };
+            if prediction != actual_value {
+                -(actual_value as f64)
+            } else {
+                0.0
+            }
+        }
+        
+        self.apply_gradients_with(input, lr, |_, a, _| compute_delta_z(a, actual_value));
+    }
+
+    /// Wrapper around `apply_gradients_with`` for MLP backpropagation
+    pub fn apply_gradients_backprop(&mut self, input: &VecF, lr: f64, delta_z: &VecF) {
+        fn get_delta_z(delta_z: &VecF, j: usize) -> f64 {
+            delta_z[j]
+        }
+        self.apply_gradients_with(input, lr, |_, _, j| get_delta_z(delta_z, j));
+    }
+
+}
 
 // ============================================================================
 // 1. Single Perceptron (one neuron, binary classification)
@@ -52,16 +99,17 @@ impl Model for Perceptron {
     
     /// Forward pass: returns output vector (single value for perceptron)
     fn forward(&self, x: &VecF) -> VecF {
-        let (_, a) = self.0.forward(x);
-        Array1::from(vec![a]) //convert a (a scalar) to VecF containing single element
+        let neuron = &self.0;
+        let output = neuron.predict_continuous(x);
+        Array1::from(vec![output])
     }
     
     /// Predict class label:
     /// x is input vector
     /// output is 1 if activated, -1 otherwise
     fn predict(&self, x: &VecF) -> Self::Target {
-        let (_, a) = self.0.forward(x);
-        if a >= 0.0 { 1 } else { -1 }
+        let neuron = &self.0;
+        neuron.predict_step(x)
     }
     
     fn loss_function(&self, prediction: &Self::Target, actual_value: &Self::Target) -> f64 {
@@ -78,8 +126,9 @@ impl Model for Perceptron {
         let prediction = self.predict(x);
         let loss = self.loss_function(&prediction, &actual_value);
         if loss > 0.0 {
-            let delta_z = -(actual_value as f64); // Gradient of loss with respect to z for misclassified sample
-            self.0.apply_gradient_descent(x, delta_z, lr);
+            let delta_z = -(actual_value as f64);
+            let neuron = &mut self.0;
+            neuron.apply_gradient_descent(x, delta_z, lr);
         }
     }
 
@@ -90,7 +139,7 @@ impl Model for Perceptron {
 // 2. Single-Layer Perceptron (multiple neurons, multi-class classification)
 // ============================================================================
 pub struct SingleLayerPerceptron {
-    neurons: DenseLayer,
+    layer: DenseLayer,
 }
 
 impl Model for SingleLayerPerceptron {
@@ -108,16 +157,11 @@ impl Model for SingleLayerPerceptron {
                 Neuron { w, b, act: ActivationFunction::Sigmoid }
             })
             .collect();
-        SingleLayerPerceptron { neurons: DenseLayer(neurons) }
+        SingleLayerPerceptron { layer: DenseLayer(neurons) }
     }
     
     fn forward(&self, x: &VecF) -> VecF {
-        Array1::from(
-            self.neurons.0
-                .iter()
-                .map(|neuron| neuron.forward(x).1)
-                .collect::<Vec<f64>>(),
-        )
+        self.layer.forward(x)
     }
     
     fn predict(&self, x: &VecF) -> Self::Target {
@@ -138,18 +182,9 @@ impl Model for SingleLayerPerceptron {
     /// actual_value is target class index
     /// lr is learning rate
     fn train(&mut self, x: &VecF, actual_value: Self::Target, lr: f64) {
-        // One-hot target vector
-        let mut target = vec![0.0; self.neurons.0.len()];
+        let mut target = vec![0.0; self.layer.0.len()];
         target[actual_value] = 1.0;
-        // Forward pass to get activations
-        let activations: Vec<f64> = self.neurons.0.iter().map(|n| n.forward(x).1).collect();
-        // Gradient for each neuron: (a - y) * sigmoid'(z)
-        for (i, neuron) in self.neurons.0.iter_mut().enumerate() {
-            let a = activations[i];
-            let da_dz = a * (1.0 - a); // sigmoid derivative
-            let delta_z = (a - target[i]) * da_dz;
-            neuron.apply_gradient_descent(x, delta_z, lr);
-        }
+        self.layer.apply_gradients_plr(x, actual_value as i8, lr);
     }
 }
 
@@ -244,9 +279,7 @@ impl Model for MultiLayerPerceptron {
         for l in (0..self.layers.len()).rev() {
             let layer = &mut self.layers[l];
             let layer_input = &a_cache[l];
-            for (j, neuron) in layer.0.iter_mut().enumerate() {
-                neuron.apply_gradient_descent(layer_input, delta_z[j], lr);
-            }
+            layer.apply_gradients_backprop(layer_input, lr, &delta_z);
             if l > 0 {
                 let mut next_delta_z: VecF = Array1::zeros(layer.0[0].w.len());
                 for (j, neuron) in layer.0.iter().enumerate() {
