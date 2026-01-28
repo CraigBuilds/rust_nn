@@ -21,6 +21,18 @@ pub trait Model: Sized {
 }
 
 // ============================================================================
+// Layer Trait - Common interface for layers in neural networks
+// ============================================================================
+
+pub trait Layer {
+    fn forward(&self, input: &VecF) -> VecF;
+    fn backward(&mut self, input: &VecF, grad_output: &VecF, lr: f64) -> VecF;
+}
+
+/// A fully connected feedforward layer
+pub struct DenseLayer(pub Vec<Neuron>);
+
+// ============================================================================
 // 1. Single Perceptron (one neuron, binary classification)
 // ============================================================================
 pub struct Perceptron(Neuron);
@@ -78,7 +90,7 @@ impl Model for Perceptron {
 // 2. Single-Layer Perceptron (multiple neurons, multi-class classification)
 // ============================================================================
 pub struct SingleLayerPerceptron {
-    neurons: Vec<Neuron>,
+    neurons: DenseLayer,
 }
 
 impl Model for SingleLayerPerceptron {
@@ -96,12 +108,12 @@ impl Model for SingleLayerPerceptron {
                 Neuron { w, b, act: ActivationFunction::Sigmoid }
             })
             .collect();
-        SingleLayerPerceptron { neurons }
+        SingleLayerPerceptron { neurons: DenseLayer(neurons) }
     }
     
     fn forward(&self, x: &VecF) -> VecF {
         Array1::from(
-            self.neurons
+            self.neurons.0
                 .iter()
                 .map(|neuron| neuron.forward(x).1)
                 .collect::<Vec<f64>>(),
@@ -127,12 +139,12 @@ impl Model for SingleLayerPerceptron {
     /// lr is learning rate
     fn train(&mut self, x: &VecF, actual_value: Self::Target, lr: f64) {
         // One-hot target vector
-        let mut target = vec![0.0; self.neurons.len()];
+        let mut target = vec![0.0; self.neurons.0.len()];
         target[actual_value] = 1.0;
         // Forward pass to get activations
-        let activations: Vec<f64> = self.neurons.iter().map(|n| n.forward(x).1).collect();
+        let activations: Vec<f64> = self.neurons.0.iter().map(|n| n.forward(x).1).collect();
         // Gradient for each neuron: (a - y) * sigmoid'(z)
-        for (i, neuron) in self.neurons.iter_mut().enumerate() {
+        for (i, neuron) in self.neurons.0.iter_mut().enumerate() {
             let a = activations[i];
             let da_dz = a * (1.0 - a); // sigmoid derivative
             let delta_z = (a - target[i]) * da_dz;
@@ -145,7 +157,7 @@ impl Model for SingleLayerPerceptron {
 // 3. Multi-Layer Perceptron (MLP) - Neural Network with Backpropagation
 // ============================================================================
 pub struct MultiLayerPerceptron {
-    layers: Vec<Vec<Neuron>>,
+    layers: Vec<DenseLayer>,
 }
 
 impl Model for MultiLayerPerceptron {
@@ -160,7 +172,6 @@ impl Model for MultiLayerPerceptron {
         for i in 1..layer_sizes.len() {
             let num_inputs = layer_sizes[i - 1];
             let num_neurons = layer_sizes[i];
-            
             let layer = (0..num_neurons)
                 .map(|_| {
                     let w = Array1::from(
@@ -170,9 +181,8 @@ impl Model for MultiLayerPerceptron {
                     Neuron { w, b, act: ActivationFunction::Sigmoid }
                 })
                 .collect();
-            layers.push(layer);
+            layers.push(DenseLayer(layer));
         }
-        
         MultiLayerPerceptron { layers }
     }
     
@@ -180,7 +190,7 @@ impl Model for MultiLayerPerceptron {
         let mut current = x.clone();
         for layer in &self.layers {
             current = Array1::from(
-                layer.iter()
+                layer.0.iter()
                     .map(|neuron| neuron.forward(&current).1)
                     .collect::<Vec<f64>>()
             );
@@ -203,7 +213,7 @@ impl Model for MultiLayerPerceptron {
         let mut a_cache = vec![x.clone()];
         let mut current = x.clone();
         for layer in &self.layers {
-            let (zs, as_): (Vec<_>, Vec<_>) = layer.iter()
+            let (zs, as_): (Vec<_>, Vec<_>) = layer.0.iter()
                 .map(|n| n.forward(&current))
                 .unzip();
             z_cache.push(Array1::from(zs));
@@ -224,7 +234,7 @@ impl Model for MultiLayerPerceptron {
         let mut delta_z: VecF = output_a.iter()
             .zip(actual_value.iter())
             .zip(output_z.iter())
-            .zip(self.layers.last().unwrap().iter())
+            .zip(self.layers.last().unwrap().0.iter())
             .map(|(((a, y_true), z), neuron)| {
                 let dl_da = 2.0 * (a - y_true);
                 let da_dz = neuron.act.df_dz(*z, *a).unwrap_or(1.0);
@@ -234,19 +244,19 @@ impl Model for MultiLayerPerceptron {
         for l in (0..self.layers.len()).rev() {
             let layer = &mut self.layers[l];
             let layer_input = &a_cache[l];
-            for (j, neuron) in layer.iter_mut().enumerate() {
+            for (j, neuron) in layer.0.iter_mut().enumerate() {
                 neuron.apply_gradient_descent(layer_input, delta_z[j], lr);
             }
             if l > 0 {
-                let mut next_delta_z: VecF = Array1::zeros(layer[0].w.len());
-                for (j, neuron) in layer.iter().enumerate() {
+                let mut next_delta_z: VecF = Array1::zeros(layer.0[0].w.len());
+                for (j, neuron) in layer.0.iter().enumerate() {
                     next_delta_z = next_delta_z + neuron.input_grad(delta_z[j]);
                 }
                 delta_z = Array1::from(
                     next_delta_z.iter()
                         .zip(&z_cache[l-1])
                         .zip(&a_cache[l])
-                        .zip(&self.layers[l-1])
+                        .zip(self.layers[l-1].0.iter())
                         .map(|(((&g, &z), &a), n)| g * n.act.df_dz(z, a).unwrap_or(1.0))
                         .collect::<Vec<f64>>()
                 );
@@ -254,3 +264,7 @@ impl Model for MultiLayerPerceptron {
         }
     }
 }
+
+// ============================================================================
+// 4. CNN (Convolutional Neural Network) - Neural Network with Convolutional Layers.
+// ============================================================================
