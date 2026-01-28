@@ -103,8 +103,8 @@ impl DenseLayer {
     fn compute_gradients(&self, a: &VecF, target: &VecF, next_delta_z: Option<&VecF>, next_layer: Option<&DenseLayer>, input: &VecF) -> VecF {
         let mut delta_z_vec = VecF::zeros(self.0.len()); // Initialize delta_z vector
         for (j, neuron) in self.0.iter().enumerate() {
-            let (z, a_j) = neuron.forward(input);
-            let da_dz = neuron.act.df_dz(z, a_j).unwrap(); // assuming non-Step activations here
+            let (z, a_j) = neuron.forward(input); //pre and post activation outputs
+            let da_dz = neuron.act.df_dz(z, a_j).unwrap(); // derivative of activation function (assuming non-Step activations here)
             let delta_z = if next_delta_z.is_none() {
                 // Output layer is simple - delta_z is just the (actual_output minus expected_output) times derivative of activation function
                 (a[j] - target[j]) * da_dz
