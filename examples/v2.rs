@@ -114,7 +114,7 @@ impl DenseLayer {
                 }
                 sum * da_dz
             } else {
-                // Output layer
+                // Output layer is simple - delta_z is just the (actual_output minus expected_output) times derivative of activation function
                 (a[j] - target[j]) * da_dz
             };
             delta_z[j] = delta;
