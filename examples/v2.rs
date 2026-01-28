@@ -100,26 +100,26 @@ impl DenseLayer {
     /// param input: input vector to this layer during forward pass
     /// return: vector of delta_z for this layer
     fn compute_gradients(&self, a: &VecF, target: &VecF, next_delta_z: Option<&VecF>, next_layer: Option<&DenseLayer>, input: &VecF) -> VecF {
-        let mut delta_z = VecF::zeros(self.0.len()); // Initialize delta_z vector
+        let mut delta_z_vec = VecF::zeros(self.0.len()); // Initialize delta_z vector
         for (j, neuron) in self.0.iter().enumerate() {
             let (z, a_j) = neuron.forward(input);
             let da_dz = neuron.act.df_dz(z, a_j).unwrap(); // assuming non-Step activations here
-            let delta = if let Some(next_dz) = next_delta_z {
-                // Hidden layer
-                let mut sum = 0.0;
-                if let Some(next_layer) = next_layer {
-                    for (k, next_neuron) in next_layer.0.iter().enumerate() {
-                        sum += next_neuron.w[j] * next_dz[k];
-                    }
-                }
-                sum * da_dz
-            } else {
+            let delta_z = if next_delta_z.is_none() {
                 // Output layer is simple - delta_z is just the (actual_output minus expected_output) times derivative of activation function
                 (a[j] - target[j]) * da_dz
+            } else {
+                // Hidden layer is more complicated - delta_z depends on next layer's weights and delta_z
+                let mut sum = 0.0;
+                let next_layer = next_layer.unwrap();
+                let next_dz = next_delta_z.unwrap();
+                for (k, next_neuron) in next_layer.0.iter().enumerate() {
+                    sum += next_neuron.w[j] * next_dz[k];
+                }
+                sum * da_dz
             };
-            delta_z[j] = delta;
+            delta_z_vec[j] = delta_z;
         }
-        delta_z
+        delta_z_vec
     }
 
     /// Apply gradients to all neurons in the layer using the provided delta_z vector.
