@@ -30,7 +30,7 @@ impl ActivationFunction {
         }
     }
 
-    // derivative d a / d z; None for Step
+    // gradient of this function (None for Step)
     fn df_dz(self, z: f64, actual_output: f64) -> Option<f64> {
         match self {
             ActivationFunction::Identity => Some(1.0),
