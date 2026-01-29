@@ -173,6 +173,10 @@ impl MultiLayerPerceptron {
             next_delta_z_vec = Some(delta_z_vec);
         }
     }
+
+    fn forward(&self, x: &VecF) -> VecF {
+        self.layers.iter().fold(x.clone(), |a, layer| layer.forward(&a))
+    }
 }
 
 // ============================================================================
