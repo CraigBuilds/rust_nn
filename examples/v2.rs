@@ -71,14 +71,14 @@ impl Neuron {
     /// why z (pre-activation)? Because z is the input to the activation function (computed from the weights)
     /// so z is the thing that directly depends on the weights, and we need dL/dz to compute dL/dw and dL/db
     /// L is given by the overall model's loss function
-    fn apply_gradient_descent(&mut self, x: &VecF, delta_z: f64, learning_rate: f64) {
+    fn apply_gradient_descent(&mut self, x: &VecF, dl_dz: f64, learning_rate: f64) {
         for i in 0..self.w.len() {
             // Update each weight using gradient descent: w_i -= lr * dL/dw_i, where dL/dw_i = delta_z * x[i]
-            let delta_w_i = delta_z * x[i]; // dL/dw_i, i.e partial derivative of loss with respect to weight w_i
-            self.w[i] -= learning_rate * delta_w_i; // Update weight based on learning rate and gradient
+            let dl_dwi = dl_dz * x[i]; // dL/dw_i, i.e partial derivative of loss with respect to weight w_i
+            self.w[i] -= learning_rate * dl_dwi; // Update weight based on learning rate and gradient
         }
-        let delta_b = delta_z; // dL/db = delta_z
-        self.b -= learning_rate * delta_b; // Update bias: b -= lr * dL/db, where dL/db = delta_z
+        let dl_db = dl_dz; // dL/db = delta_z
+        self.b -= learning_rate * dl_db; // Update bias: b -= lr * dL/db, where dL/db = delta_z
     }
 }
 
