@@ -180,149 +180,90 @@ impl MultiLayerPerceptron {
 }
 
 // ============================================================================
-// Convolutional Layer Struct - not fully connected; uses local connections and shared filters
+// Convolutional2D Layer Struct - not fully connected; uses local connections and shared filters
 // ============================================================================
-struct ConvolutionalLayer1D(Vec<Neuron>);
-impl ConvolutionalLayer1D {
-    /// Forward pass for convolutional layer
-    /// Each neuron acts as a filter sliding over the input vector (1D convolution)
-    /// Output length = input length - filter length + 1
-    fn forward(&self, x: &VecF) -> VecF {
-        let filter_len = self.0[0].w.len();
-        let input_len = x.len();
-        let output_len = input_len.saturating_sub(filter_len) + 1;
-        let mut output = VecF::zeros(output_len);
 
-        for i in 0..output_len {
-            // For each position, create a slice of the input
-            let x_slice = x.slice(s![i..i + filter_len]);
-            // Each neuron is a filter; apply all filters and sum their outputs
-            let mut sum = 0.0;
-            for neuron in &self.0 {
-                let (_z, actual_output) = neuron.forward(&x_slice.to_owned());
-                sum += actual_output;
+//Like a neuron but with 2D weights (kernel) instead of 1D weights
+struct Kernel2D {
+    weights: ndarray::Array2<f64>,
+    bias: f64,
+    act: ActivationFunction,
+}
+
+impl  Kernel2D {
+    // Forward pass for a single kernel on a 2D input
+    fn forward(&self, input: &ndarray::Array2<f64>, stride: usize, padding: usize) -> ndarray::Array2<f64> {
+        let (in_height, in_width) = input.dim();
+        let (k_height, k_width) = self.weights.dim();
+        let out_height = (in_height + 2 * padding - k_height) / stride + 1;
+        let out_width = (in_width + 2 * padding - k_width) / stride + 1;
+        let mut output = ndarray::Array2::<f64>::zeros((out_height, out_width));
+
+        // Pad input
+        let padded_input = if padding > 0 {
+            let mut padded = ndarray::Array2::<f64>::zeros((in_height + 2 * padding, in_width + 2 * padding));
+            padded.slice_mut(s![padding..padding+in_height, padding..padding+in_width]).assign(input);
+            padded
+        } else {
+            input.clone()
+        };
+
+        for i in 0..out_height {
+            for j in 0..out_width {
+                let region = padded_input.slice(s![
+                    i*stride..i*stride+k_height,
+                    j*stride..j*stride+k_width
+                ]);
+                let z = (&region * &self.weights).sum() + self.bias;
+                output[[i, j]] = self.act.f(z);
             }
-            output[i] = sum;
         }
         output
     }
-
-    /// Compute gradients (delta_z) for the convolutional layer.
-    /// For output layer: expected_output must be provided, next_delta_z/next_layer are None.
-    /// For hidden layer: next_delta_z and next_layer must be provided, expected_output is ignored.
-    /// - actual_output: activations of this layer
-    /// - expected_output: expected outputs for this layer (only for output layer)
-    /// - next_delta_z: delta_z vector from the next layer (only for hidden layers)
-    /// - next_layer: reference to the next layer (only for hidden layers)
-    /// - input: input vector to this layer during forward pass
-    /// Returns: vector of delta_z for this layer (length = number of neurons)
-    fn compute_gradients(
-        &self,
-        actual_output: &VecF,
-        expected_output: &VecF,
-        next_delta_z: Option<&VecF>,
-        next_layer: Option<&ConvolutionalLayer1D>,
-        input: &VecF,
-    ) -> VecF {
-        let mut delta_z_vec = VecF::zeros(self.0.len());
-        for (j, neuron) in self.0.iter().enumerate() {
-            // For convolution, each neuron slides over the input, so we need to aggregate gradients over all positions
-            // Here, we assume each neuron is a filter and output is sum of activations over all positions
-            // We'll compute the gradient for the filter as the sum of gradients over all positions
-
-            // For each position in the input where this filter applies:
-            let filter_len = neuron.w.len();
-            let input_len = input.len();
-            let output_len = input_len.saturating_sub(filter_len) + 1;
-            let mut grad_sum = 0.0;
-
-            for i in 0..output_len {
-                let x_slice = input.slice(s![i..i + filter_len]);
-                let (z, actual_output_j) = neuron.forward(&x_slice.to_owned());
-                let da_dz = neuron.act.df_dz(z, actual_output_j).unwrap();
-
-                let delta_z = if next_delta_z.is_none() {
-                    // Output layer: delta_z = (actual_output - expected_output) * da/dz
-                    (actual_output[i] - expected_output[i]) * da_dz
-                } else {
-                    // Hidden layer: sum over next layer's weights * next_delta_z, times da/dz
-                    let mut sum = 0.0;
-                    let next_layer = next_layer.unwrap();
-                    let next_dz = next_delta_z.unwrap();
-                    for (k, next_neuron) in next_layer.0.iter().enumerate() {
-                        // Each next_neuron's filter overlaps with this neuron's output at some positions
-                        // For simplicity, assume full connection (like dense), or you can implement proper convolutional backprop
-                        // Here, we just sum the product of the corresponding weight and next_delta_z
-                        if j < next_neuron.w.len() {
-                            sum += next_neuron.w[j] * next_dz[k];
-                        }
-                    }
-                    sum * da_dz
-                };
-                grad_sum += delta_z;
+    
+    fn apply_gradient_descent(&mut self, input_region: &ndarray::Array2<f64>, dl_dz: f64, learning_rate: f64) {
+        for i in 0..self.weights.dim().0 {
+            for j in 0..self.weights.dim().1 {
+                let dl_dwij = dl_dz * input_region[[i, j]];
+                self.weights[[i, j]] -= learning_rate * dl_dwij;
             }
-            delta_z_vec[j] = grad_sum;
         }
-        delta_z_vec
+        self.bias -= learning_rate * dl_dz;
     }
 
-    fn apply_gradient_descent(&mut self, input: &VecF, lr: f64, delta_z_vec: &VecF) {
-        for (neuron, &delta_z) in self.0.iter_mut().zip(delta_z_vec.iter()) {
-            neuron.apply_gradient_descent(input, delta_z, lr);
-        }
+}
+
+struct Conv2DLayer {
+    kernels: Vec<Kernel2D>,
+    stride: usize,
+    padding: usize,
+}
+
+impl Conv2DLayer {
+    fn forward(&self, input: &ndarray::Array2<f64>) -> Vec<ndarray::Array2<f64>> {
+        self.kernels.iter().map(|k| k.forward(input, self.stride, self.padding)).collect()
+    }
+
+    fn compute_gradients(&self, /* params */) {
+        // To be implemented: compute gradients for Conv2D layer during backpropagation
+    }
+
+    fn apply_gradient_descent(&mut self, /* params */) {
+        // To be implemented: apply gradients to kernels during backpropagation
     }
 }
 
-// ============================================================================
-// Convolutional Neural Network Struct - A simple CNN
-// ============================================================================
-struct ConvolutionalNeuralNetwork {
-    layers: Vec<ConvolutionalLayer1D>,
+struct CNN {
+    layers: Vec<GenericLayer>, //could be Conv2DLayer, DenseLayer, etc.
 }
 
-impl ConvolutionalNeuralNetwork {
-
-    fn forward(&self, x: &VecF) -> VecF {
-        self.layers.iter().fold(x.clone(), |a, layer| layer.forward(&a))
+impl CNN {
+    fn train(&mut self, /* params */) {
+        // To be implemented: training loop for CNN using backpropagation
     }
-
-    /// Train the CNN using backpropagation
-    fn train(&mut self, x: &VecF, expected_output: &VecF, lr: f64) {
-        // Initialize caches for activations
-        let mut actual_output_cache: Vec<VecF> = Vec::with_capacity(self.layers.len() + 1);
-        actual_output_cache.push(x.clone());
-
-        // Forward pass (calculate and cache activations (outputs) for each layer)
-        for layer in &self.layers {
-            let actual_output = layer.forward(actual_output_cache.last().unwrap());
-            actual_output_cache.push(actual_output);
-        }
-
-        //Backwards pass (compute gradients and update weights)
-        let mut next_delta_z_vec: Option<VecF> = None;
-        let num_layers = self.layers.len();
-        for i in (0..num_layers).rev() {
-            let (left, right) = self.layers.split_at_mut(i + 1);
-            let layer = &mut left[i];
-            let layer_input = &actual_output_cache[i];
-            let actual_output = &actual_output_cache[i + 1];
-            let next_layer = if i + 1 < num_layers { Some(&right[0]) } else { None };
-
-            let delta_z_vec = layer.compute_gradients(actual_output, expected_output, next_delta_z_vec.as_ref(), next_layer, layer_input);
-            layer.apply_gradient_descent(layer_input, lr, &delta_z_vec);
-
-            next_delta_z_vec = Some(delta_z_vec);
-        }
+    fn forward(&self, /* params */) {
+        // To be implemented: forward pass through the CNN
     }
-}
-
-// ============================================================================
-// Attention Mechanism Struct - Simplified attention layer
-// ============================================================================
-struct AttentionLayer {
-    pub query_weights: VecF,
-    pub key_weights: VecF,
-    pub value_weights: VecF,
 }
 
 fn main() {
